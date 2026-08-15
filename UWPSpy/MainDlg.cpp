@@ -1241,6 +1241,7 @@ void CMainDlg::ElementRemoved(InstanceHandle handle) {
     }
 
     m_elementItems.erase(it);
+    m_cachedElementInfo.erase(handle);
 }
 
 BOOL CMainDlg::OnInitDialog(CWindow wndFocus, LPARAM lInitParam) {
@@ -2309,11 +2310,77 @@ void CMainDlg::SetSticky(bool sticky) {
     CButton(GetDlgItem(IDC_STICKY))
         .SetCheck(m_sticky ? BST_CHECKED : BST_UNCHECKED);
 
-    if (!m_sticky) {
+    if (m_sticky) {
+        // Sticky was turned on: snapshot the basic information of all
+        // elements, so that it remains available after the target elements
+        // are destroyed.
+        SnapshotAllElementsBasicInfo();
+    } else {
         // Sticky was turned off: apply the mutations that were cached while
         // the tree was frozen.
         ReplayPendingVisualMutations();
     }
+}
+
+void CMainDlg::SnapshotAllElementsBasicInfo() {
+    for (const auto& [handle, elementItem] : m_elementItems) {
+        wf::IInspectable obj;
+        if (FAILED(m_xamlDiagnostics->GetIInspectableFromHandle(
+                handle,
+                reinterpret_cast<::IInspectable**>(winrt::put_abi(obj)))) ||
+            !obj) {
+            continue;
+        }
+
+        CacheElementBasicInfo(handle, obj, !!elementItem.parentHandle);
+    }
+
+    // Also cache the attributes and visual states of the currently selected
+    // element.
+    auto treeView = CTreeViewCtrlEx(GetDlgItem(IDC_ELEMENT_TREE));
+    auto selectedItem = treeView.GetSelectedItem();
+    if (selectedItem && selectedItem.GetParent()) {
+        auto handle = HandleFromLParam(selectedItem.GetData());
+        PopulateAttributesList(handle);
+        PopulateVisualStatesTree(handle);
+    }
+}
+
+void CMainDlg::CacheElementBasicInfo(InstanceHandle handle,
+                                     wf::IInspectable obj,
+                                     bool hasParent) {
+    auto& cache = m_cachedElementInfo[handle];
+
+    try {
+        cache.className = winrt::get_class_name(obj);
+    } catch (...) {
+        return;
+    }
+
+    try {
+        std::wstring elementName;
+        if (auto frameworkElement = obj.try_as<wux::FrameworkElement>()) {
+            elementName = frameworkElement.Name();
+        } else if (auto frameworkElement =
+                       obj.try_as<mux::FrameworkElement>()) {
+            elementName = frameworkElement.Name();
+        }
+        cache.elementName = elementName;
+    } catch (...) {
+    }
+
+    try {
+        auto rect =
+            hasParent ? GetRelativeElementRect(obj) : GetRootElementRect(obj);
+        cache.rectText =
+            rect ? std::format(L"({},{}) - ({},{})  -  {}x{}", rect->left,
+                               rect->top, rect->right, rect->bottom,
+                               rect->Width(), rect->Height())
+                 : std::wstring(L"Unknown");
+    } catch (...) {
+    }
+
+    cache.hasBasicInfo = true;
 }
 
 void CMainDlg::StartDelayedSticky(int seconds) {
@@ -2443,6 +2510,8 @@ bool CMainDlg::SetSelectedElementInformation() {
     auto handle = HandleFromLParam(selectedItem.GetData());
     bool hasParent = !!selectedItem.GetParent();
 
+    auto itCache = m_cachedElementInfo.find(handle);
+
     wf::IInspectable obj;
     try {
         winrt::check_hresult(m_xamlDiagnostics->GetIInspectableFromHandle(
@@ -2452,23 +2521,37 @@ bool CMainDlg::SetSelectedElementInformation() {
     } catch (...) {
         obj = nullptr;
 
-        HRESULT hr = winrt::to_hresult();
-        auto errorMsg = std::format(L"Error {:08X}", static_cast<DWORD>(hr));
-        SetDlgItemText(IDC_CLASS_EDIT, errorMsg.c_str());
+        if (itCache != m_cachedElementInfo.end() &&
+            itCache->second.hasBasicInfo) {
+            // The element no longer exists, show the cached class name.
+            auto classNameText = itCache->second.className + L" (cached)";
+            SetDlgItemText(IDC_CLASS_EDIT, classNameText.c_str());
+        } else {
+            HRESULT hr = winrt::to_hresult();
+            auto errorMsg =
+                std::format(L"Error {:08X}", static_cast<DWORD>(hr));
+            SetDlgItemText(IDC_CLASS_EDIT, errorMsg.c_str());
+        }
     }
 
     std::wstring frameworkElementName;
-    try {
-        if (auto frameworkElement = obj.try_as<wux::FrameworkElement>()) {
-            frameworkElementName = frameworkElement.Name();
-        } else if (auto frameworkElement =
-                       obj.try_as<mux::FrameworkElement>()) {
-            frameworkElementName = frameworkElement.Name();
+    if (obj) {
+        try {
+            if (auto frameworkElement = obj.try_as<wux::FrameworkElement>()) {
+                frameworkElementName = frameworkElement.Name();
+            } else if (auto frameworkElement =
+                           obj.try_as<mux::FrameworkElement>()) {
+                frameworkElementName = frameworkElement.Name();
+            }
+        } catch (...) {
+            HRESULT hr = winrt::to_hresult();
+            frameworkElementName =
+                std::format(L"Error {:08X}", static_cast<DWORD>(hr));
         }
-    } catch (...) {
-        HRESULT hr = winrt::to_hresult();
-        frameworkElementName =
-            std::format(L"Error {:08X}", static_cast<DWORD>(hr));
+    } else if (itCache != m_cachedElementInfo.end() &&
+               itCache->second.hasBasicInfo) {
+        // The element no longer exists, show the cached element name.
+        frameworkElementName = itCache->second.elementName;
     }
 
     SetDlgItemText(IDC_NAME_EDIT, frameworkElementName.c_str());
@@ -2491,13 +2574,27 @@ bool CMainDlg::SetSelectedElementInformation() {
                 std::format(L"Error {:08X}", static_cast<DWORD>(hr));
             SetDlgItemText(IDC_RECT_EDIT, errorMsg.c_str());
         }
+
+        // Update the cached basic info while the element is alive.
+        CacheElementBasicInfo(handle, obj, hasParent);
+    } else if (itCache != m_cachedElementInfo.end() &&
+               itCache->second.hasBasicInfo) {
+        // The element no longer exists, show the cached rectangle.
+        SetDlgItemText(IDC_RECT_EDIT, itCache->second.rectText.c_str());
     } else {
         SetDlgItemText(IDC_RECT_EDIT, L"");
     }
 
     if (hasParent) {
-        PopulateAttributesList(handle);
-        PopulateVisualStatesTree(handle);
+        if (obj) {
+            PopulateAttributesList(handle);
+            PopulateVisualStatesTree(handle);
+        } else {
+            // The element no longer exists, show the cached data if
+            // available.
+            PopulateAttributesListFromCache(handle);
+            PopulateVisualStatesTreeFromCache(handle);
+        }
     } else {
         m_attributesList.DeleteAllItems();
         m_attributesList.SetSortColumn(-1);
@@ -2608,12 +2705,23 @@ void CMainDlg::PopulateAttributesList(InstanceHandle handle) {
         handle, &sourceCount, &pPropertySources, &propertyCount,
         &pPropertyValues);
     if (FAILED(hr)) {
+        auto itCache = m_cachedElementInfo.find(handle);
+        if (itCache != m_cachedElementInfo.end() &&
+            itCache->second.hasAttributes) {
+            // The element information can't be retrieved, fall back to the
+            // cached attributes.
+            PopulateAttributesListFromCache(handle);
+            return;
+        }
+
         auto errorMsg = std::format(L"Error {:08X}", static_cast<DWORD>(hr));
         attributesList.AddItem(0, 0, errorMsg.c_str());
 
         attributesList.SetRedraw(TRUE);
         return;
     }
+
+    std::vector<std::pair<std::wstring, std::wstring>> cacheRows;
 
     const auto metadataBitsToString = [](hyper metadataBits) {
         std::wstring str;
@@ -2706,6 +2814,8 @@ void CMainDlg::PopulateAttributesList(InstanceHandle handle) {
         attributesList.AddItem(row, c++, v.PropertyName);
         attributesList.AddItem(row, c++, value.c_str());
 
+        cacheRows.emplace_back(v.PropertyName, value);
+
         if (m_detailedProperties) {
             attributesList.AddItem(row, c++, v.Type);
             attributesList.AddItem(row, c++, v.DeclaringType);
@@ -2734,10 +2844,49 @@ void CMainDlg::PopulateAttributesList(InstanceHandle handle) {
     propertiesComboBox.SetDroppedWidth(
         GetRequiredComboDroppedWidth(propertiesComboBox));
 
+    // Cache the displayed attributes so that they remain available after the
+    // element is destroyed.
+    {
+        auto& cache = m_cachedElementInfo[handle];
+        cache.attributes = std::move(cacheRows);
+        cache.hasAttributes = true;
+    }
+
     // Not documented, but it makes sense that the arrays have to be
     // freed and this seems to be working.
     CoTaskMemFree(pPropertySources);
     CoTaskMemFree(pPropertyValues);
+
+    attributesList.SetRedraw(TRUE);
+}
+
+void CMainDlg::PopulateAttributesListFromCache(InstanceHandle handle) {
+    CListViewCtrl attributesList(m_attributesList);
+
+    attributesList.SetRedraw(FALSE);
+
+    attributesList.DeleteAllItems();
+    m_attributesList.SetSortColumn(-1);
+
+    auto propertiesComboBox = CComboBox(GetDlgItem(IDC_PROPERTY_NAME));
+    propertiesComboBox.ResetContent();
+
+    auto itCache = m_cachedElementInfo.find(handle);
+    if (itCache == m_cachedElementInfo.end() ||
+        !itCache->second.hasAttributes) {
+        attributesList.AddItem(
+            0, 0, L"(element no longer exists; no cached attributes)");
+
+        attributesList.SetRedraw(TRUE);
+        return;
+    }
+
+    int row = 0;
+    for (const auto& [name, value] : itCache->second.attributes) {
+        attributesList.AddItem(row, 0, name.c_str());
+        attributesList.AddItem(row, 1, value.c_str());
+        row++;
+    }
 
     attributesList.SetRedraw(TRUE);
 }
@@ -2747,6 +2896,9 @@ void CMainDlg::PopulateVisualStatesTree(InstanceHandle handle) {
     visualStatesTree.SetRedraw(FALSE);
 
     visualStatesTree.DeleteAllItems();
+
+    std::vector<std::pair<std::wstring, std::vector<std::wstring>>>
+        cacheGroups;
 
     try {
         wf::IInspectable element;
@@ -2767,7 +2919,8 @@ void CMainDlg::PopulateVisualStatesTree(InstanceHandle handle) {
             throw std::runtime_error("Unsupported element");
         }
 
-        auto populateList = [&visualStatesTree](auto visualStateGroups) {
+        auto populateList = [&visualStatesTree,
+                             &cacheGroups](auto visualStateGroups) {
             for (const auto& group : visualStateGroups) {
                 auto groupName = group.Name();
                 if (groupName.empty()) {
@@ -2778,6 +2931,10 @@ void CMainDlg::PopulateVisualStatesTree(InstanceHandle handle) {
 
                 auto groupItem = visualStatesTree.InsertItem(
                     groupName.c_str(), TVI_ROOT, TVI_LAST);
+
+                cacheGroups.emplace_back(groupName,
+                                         std::vector<std::wstring>{});
+                auto& cacheStates = cacheGroups.back().second;
 
                 for (auto state : group.States()) {
                     std::wstring name(state.Name());
@@ -2791,6 +2948,7 @@ void CMainDlg::PopulateVisualStatesTree(InstanceHandle handle) {
 
                     visualStatesTree.InsertItem(name.c_str(), groupItem,
                                                 TVI_LAST);
+                    cacheStates.push_back(name);
                 }
 
                 groupItem.Expand();
@@ -2809,12 +2967,53 @@ void CMainDlg::PopulateVisualStatesTree(InstanceHandle handle) {
             populateList(visualStateGroups);
         }
     } catch (...) {
+        auto itCache = m_cachedElementInfo.find(handle);
+        if (itCache != m_cachedElementInfo.end() &&
+            itCache->second.hasVisualStates) {
+            // The element information can't be retrieved, fall back to the
+            // cached visual states.
+            PopulateVisualStatesTreeFromCache(handle);
+            return;
+        }
+
         HRESULT hr = winrt::to_hresult();
         auto errorMsg = std::format(L"Error {:08X}", static_cast<DWORD>(hr));
         visualStatesTree.InsertItem(errorMsg.c_str(), TVI_ROOT, TVI_LAST);
 
         visualStatesTree.SetRedraw(TRUE);
         return;
+    }
+
+    // Cache the displayed visual states so that they remain available after
+    // the element is destroyed.
+    {
+        auto& cache = m_cachedElementInfo[handle];
+        cache.visualStates = std::move(cacheGroups);
+        cache.hasVisualStates = true;
+    }
+
+    visualStatesTree.SetRedraw(TRUE);
+}
+
+void CMainDlg::PopulateVisualStatesTreeFromCache(InstanceHandle handle) {
+    auto visualStatesTree = CTreeViewCtrlEx(GetDlgItem(IDC_VISUAL_STATE_TREE));
+    visualStatesTree.SetRedraw(FALSE);
+
+    visualStatesTree.DeleteAllItems();
+
+    auto itCache = m_cachedElementInfo.find(handle);
+    if (itCache != m_cachedElementInfo.end() &&
+        itCache->second.hasVisualStates) {
+        for (const auto& [groupName, states] : itCache->second.visualStates) {
+            auto groupItem = visualStatesTree.InsertItem(groupName.c_str(),
+                                                         TVI_ROOT, TVI_LAST);
+            for (const auto& stateName : states) {
+                visualStatesTree.InsertItem(stateName.c_str(), groupItem,
+                                            TVI_LAST);
+            }
+
+            groupItem.Expand();
+        }
     }
 
     visualStatesTree.SetRedraw(TRUE);
