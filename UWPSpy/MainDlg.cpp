@@ -2311,10 +2311,10 @@ void CMainDlg::SetSticky(bool sticky) {
         .SetCheck(m_sticky ? BST_CHECKED : BST_UNCHECKED);
 
     if (m_sticky) {
-        // Sticky was turned on: snapshot the basic information of all
-        // elements, so that it remains available after the target elements
-        // are destroyed.
-        SnapshotAllElementsBasicInfo();
+        // Sticky was turned on: snapshot the information of all elements,
+        // so that it remains available after the target elements are
+        // destroyed.
+        SnapshotAllElementsInfo();
     } else {
         // Sticky was turned off: apply the mutations that were cached while
         // the tree was frozen.
@@ -2322,7 +2322,7 @@ void CMainDlg::SetSticky(bool sticky) {
     }
 }
 
-void CMainDlg::SnapshotAllElementsBasicInfo() {
+void CMainDlg::SnapshotAllElementsInfo() {
     for (const auto& [handle, elementItem] : m_elementItems) {
         wf::IInspectable obj;
         if (FAILED(m_xamlDiagnostics->GetIInspectableFromHandle(
@@ -2333,16 +2333,8 @@ void CMainDlg::SnapshotAllElementsBasicInfo() {
         }
 
         CacheElementBasicInfo(handle, obj, !!elementItem.parentHandle);
-    }
-
-    // Also cache the attributes and visual states of the currently selected
-    // element.
-    auto treeView = CTreeViewCtrlEx(GetDlgItem(IDC_ELEMENT_TREE));
-    auto selectedItem = treeView.GetSelectedItem();
-    if (selectedItem && selectedItem.GetParent()) {
-        auto handle = HandleFromLParam(selectedItem.GetData());
-        PopulateAttributesList(handle);
-        PopulateVisualStatesTree(handle);
+        CacheElementAttributes(handle);
+        CacheElementVisualStates(handle);
     }
 }
 
@@ -2381,6 +2373,109 @@ void CMainDlg::CacheElementBasicInfo(InstanceHandle handle,
     }
 
     cache.hasBasicInfo = true;
+}
+
+void CMainDlg::CacheElementAttributes(InstanceHandle handle) {
+    unsigned int sourceCount = 0;
+    PropertyChainSource* pPropertySources = nullptr;
+    unsigned int propertyCount = 0;
+    PropertyChainValue* pPropertyValues = nullptr;
+    HRESULT hr = m_visualTreeService->GetPropertyValuesChain(
+        handle, &sourceCount, &pPropertySources, &propertyCount,
+        &pPropertyValues);
+    if (FAILED(hr)) {
+        return;
+    }
+
+    std::vector<std::pair<std::wstring, std::wstring>> cacheRows;
+    try {
+        for (unsigned int i = 0; i < propertyCount; i++) {
+            const auto& v = pPropertyValues[i];
+            const auto& src = pPropertySources[v.PropertyChainIndex];
+
+            if (!m_detailedProperties && src.Source != BaseValueSourceLocal) {
+                continue;
+            }
+
+            auto [value, valueShownAsIs] =
+                FormatPropertyValue(v, m_xamlDiagnostics.get());
+            cacheRows.emplace_back(v.PropertyName, value);
+        }
+    } catch (...) {
+    }
+
+    CoTaskMemFree(pPropertySources);
+    CoTaskMemFree(pPropertyValues);
+
+    auto& cache = m_cachedElementInfo[handle];
+    cache.attributes = std::move(cacheRows);
+    cache.hasAttributes = true;
+}
+
+void CMainDlg::CacheElementVisualStates(InstanceHandle handle) {
+    try {
+        wf::IInspectable element;
+        winrt::check_hresult(m_xamlDiagnostics->GetIInspectableFromHandle(
+            handle,
+            reinterpret_cast<::IInspectable**>(winrt::put_abi(element))));
+        if (!element) {
+            return;
+        }
+
+        auto wuiFrameworkElement = element.try_as<wux::FrameworkElement>();
+        auto muiFrameworkElement =
+            wuiFrameworkElement ? mux::FrameworkElement{nullptr}
+                                : element.try_as<mux::FrameworkElement>();
+
+        // A workaround for a taskbar search box inspection crash.
+        if (IsUnsupportedForVisualStates(wuiFrameworkElement)) {
+            return;
+        }
+
+        std::vector<std::pair<std::wstring, std::vector<std::wstring>>>
+            cacheGroups;
+
+        auto collectList = [&cacheGroups](auto visualStateGroups) {
+            for (const auto& group : visualStateGroups) {
+                auto groupName = group.Name();
+                if (groupName.empty()) {
+                    groupName = L"(unnamed)";
+                }
+
+                auto currentState = group.CurrentState();
+
+                cacheGroups.emplace_back(groupName,
+                                         std::vector<std::wstring>{});
+                auto& cacheStates = cacheGroups.back().second;
+
+                for (auto state : group.States()) {
+                    std::wstring name(state.Name());
+                    if (name.empty()) {
+                        name = L"(unnamed)";
+                    }
+
+                    if (state == currentState) {
+                        name += L" (current)";
+                    }
+
+                    cacheStates.push_back(name);
+                }
+            }
+        };
+
+        if (wuiFrameworkElement) {
+            collectList(wux::VisualStateManager::GetVisualStateGroups(
+                wuiFrameworkElement));
+        } else if (muiFrameworkElement) {
+            collectList(mux::VisualStateManager::GetVisualStateGroups(
+                muiFrameworkElement));
+        }
+
+        auto& cache = m_cachedElementInfo[handle];
+        cache.visualStates = std::move(cacheGroups);
+        cache.hasVisualStates = true;
+    } catch (...) {
+    }
 }
 
 void CMainDlg::StartDelayedSticky(int seconds) {
