@@ -15,6 +15,7 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
         TIMER_ID_REFRESH_SELECTED_ELEMENT_INFORMATION,
         TIMER_ID_COPY_SUBTREE_DELAYED,
         TIMER_ID_STICKY_DELAYED,
+        TIMER_ID_FREEZE_DELAYED,
     };
 
     enum {
@@ -85,9 +86,9 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
             DLGRESIZE_CONTROL(IDC_NAME_EDIT, DLSZ_MOVE_X | DLSZ_SIZE_X)
             DLGRESIZE_CONTROL(IDC_RECT_STATIC, DLSZ_MOVE_X)
             DLGRESIZE_CONTROL(IDC_RECT_EDIT, DLSZ_MOVE_X)
-            DLGRESIZE_CONTROL(IDC_DETAILS_TABS, DLSZ_MOVE_X)
-            DLGRESIZE_CONTROL(IDC_ATTRIBUTE_LIST, DLSZ_MOVE_X | DLSZ_SIZE_Y)
-            DLGRESIZE_CONTROL(IDC_VISUAL_STATE_TREE, DLSZ_MOVE_X | DLSZ_SIZE_Y)
+            DLGRESIZE_CONTROL(IDC_DETAILS_TABS, DLSZ_MOVE_X | DLSZ_SIZE_Y)
+            DLGRESIZE_CONTROL(IDC_ATTRIBUTE_LIST, DLSZ_SIZE_X | DLSZ_SIZE_Y)
+            DLGRESIZE_CONTROL(IDC_VISUAL_STATE_TREE, DLSZ_SIZE_X | DLSZ_SIZE_Y)
             DLGRESIZE_CONTROL(IDC_PROPERTY_NAME, DLSZ_MOVE_X | DLSZ_MOVE_Y)
             DLGRESIZE_CONTROL(IDC_PROPERTY_VALUE, DLSZ_MOVE_X | DLSZ_MOVE_Y)
             DLGRESIZE_CONTROL(IDC_PROPERTY_VALUE_XAML,
@@ -218,6 +219,7 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
     CIcon m_icon, m_smallIcon;
     CContainedWindowT<CTreeViewCtrlEx> m_elementTree;
     bool m_sticky = false;
+    bool m_frozen = false;
     CSortListViewCtrl m_attributesList;
     bool m_listCollapsed = false;
     bool m_highlightSelection = true;
