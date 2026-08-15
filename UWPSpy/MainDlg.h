@@ -171,6 +171,12 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
     void CancelDelayedSticky();
     void UpdateStickyButtonText();
     void ReplayPendingVisualMutations();
+    void SnapshotAllElementsBasicInfo();
+    void CacheElementBasicInfo(InstanceHandle handle,
+                               wf::IInspectable obj,
+                               bool hasParent);
+    void PopulateAttributesListFromCache(InstanceHandle handle);
+    void PopulateVisualStatesTreeFromCache(InstanceHandle handle);
     void OnAppAbout(UINT uNotifyCode, int nID, CWindow wndCtl);
     void OnCancel(UINT uNotifyCode, int nID, CWindow wndCtl);
     LRESULT OnActivateWindow(UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -242,6 +248,27 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
     };
 
     std::deque<PendingVisualMutation> m_pendingVisualMutations;
+
+    // Cached element information, used to display data for elements that no
+    // longer exist (e.g. elements of a dismissed context menu inspected
+    // while sticky is on). The basic info (class, name, rectangle) of all
+    // elements is snapshotted when sticky is turned on; attributes and
+    // visual states are cached whenever they are displayed successfully.
+    struct CachedElementInfo {
+        bool hasBasicInfo = false;
+        std::wstring className;
+        std::wstring elementName;
+        std::wstring rectText;
+
+        bool hasAttributes = false;
+        std::vector<std::pair<std::wstring, std::wstring>> attributes;
+
+        bool hasVisualStates = false;
+        std::vector<std::pair<std::wstring, std::vector<std::wstring>>>
+            visualStates;
+    };
+
+    std::unordered_map<InstanceHandle, CachedElementInfo> m_cachedElementInfo;
     CSortListViewCtrl m_attributesList;
     bool m_listCollapsed = false;
     bool m_highlightSelection = true;
