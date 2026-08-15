@@ -14,6 +14,7 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
         TIMER_ID_SET_SELECTED_ELEMENT_INFORMATION,
         TIMER_ID_REFRESH_SELECTED_ELEMENT_INFORMATION,
         TIMER_ID_COPY_SUBTREE_DELAYED,
+        TIMER_ID_STICKY_DELAYED,
     };
 
     enum {
@@ -190,6 +191,7 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
     void OnElementTreeContextMenu(CTreeViewCtrlEx treeView, CPoint point);
     void OnAttributesListContextMenu(CListViewCtrl listView, CPoint point);
     void OnVisualStateContextMenu(CTreeViewCtrlEx treeView, CPoint point);
+    void OnStickyContextMenu(CButton stickyButton, CPoint point);
     void DumpElementRecursive(std::wstring& output,
                               InstanceHandle handle,
                               bool isFirst);
