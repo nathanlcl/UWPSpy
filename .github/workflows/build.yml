@@ -10,17 +10,32 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
       - uses: microsoft/setup-msbuild@v2
 
       - name: Restore NuGet packages
-        run: nuget restore UWPSpy.sln
+        shell: pwsh
+        run: |
+          nuget restore UWPSpy.sln *>&1 | Tee-Object nuget-restore.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build (Release x64)
-        run: msbuild UWPSpy.sln /p:Configuration=Release /p:Platform=x64 /m /v:m
+        run: msbuild UWPSpy.sln /p:Configuration=Release /p:Platform=x64 /m /v:m /fl "/flp:logfile=msbuild.log;verbosity=detailed"
+
+      - name: Publish build logs
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-logs
+          name: Build logs
+          prerelease: true
+          fail_on_unmatched_files: false
+          files: |
+            nuget-restore.log
+            msbuild.log
 
       - name: Package artifacts
         shell: pwsh
