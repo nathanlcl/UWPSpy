@@ -1517,6 +1517,13 @@ void CMainDlg::OnTimer(UINT_PTR nIDEvent) {
             break;
         }
 
+        case TIMER_ID_STICKY_DELAYED:
+            KillTimer(nIDEvent);
+
+            m_sticky = true;
+            CButton(GetDlgItem(IDC_STICKY)).SetCheck(BST_CHECKED);
+            break;
+
         case TIMER_ID_SET_SELECTED_ELEMENT_INFORMATION:
             KillTimer(nIDEvent);
             SetSelectedElementInformation();
@@ -1592,6 +1599,12 @@ void CMainDlg::OnContextMenu(CWindow wnd, CPoint point) {
     auto visualStatesTree = CTreeViewCtrlEx(GetDlgItem(IDC_VISUAL_STATE_TREE));
     if (wnd == visualStatesTree) {
         OnVisualStateContextMenu(visualStatesTree, point);
+        return;
+    }
+
+    auto stickyButton = CButton(GetDlgItem(IDC_STICKY));
+    if (wnd == stickyButton) {
+        OnStickyContextMenu(stickyButton, point);
         return;
     }
 }
@@ -2153,6 +2166,36 @@ void CMainDlg::OnHighlightSelection(UINT uNotifyCode, int nID, CWindow wndCtl) {
 
 void CMainDlg::OnSticky(UINT uNotifyCode, int nID, CWindow wndCtl) {
     m_sticky = CButton(wndCtl).GetCheck() != BST_UNCHECKED;
+
+    // Cancel a pending delayed sticky if the checkbox was toggled manually.
+    KillTimer(TIMER_ID_STICKY_DELAYED);
+}
+
+void CMainDlg::OnStickyContextMenu(CButton stickyButton, CPoint point) {
+    CPoint menuPoint = point;
+    if (menuPoint.x == -1 && menuPoint.y == -1) {
+        // The context menu was invoked via the keyboard, use the center of
+        // the button.
+        CRect rect;
+        stickyButton.GetWindowRect(&rect);
+        menuPoint = rect.CenterPoint();
+    }
+
+    CMenu menu;
+    menu.CreatePopupMenu();
+
+    enum { MENU_ID_STICKY_DELAYED = 1 };
+
+    menu.AppendMenu(MF_STRING | (m_sticky ? MF_GRAYED : 0),
+                    MENU_ID_STICKY_DELAYED, L"Sticky (10 seconds delay)");
+
+    int nCmd = menu.TrackPopupMenu(TPM_RIGHTBUTTON | TPM_RETURNCMD, menuPoint.x,
+                                   menuPoint.y, m_hWnd);
+    switch (nCmd) {
+        case MENU_ID_STICKY_DELAYED:
+            SetTimer(TIMER_ID_STICKY_DELAYED, 10000);
+            break;
+    }
 }
 
 void CMainDlg::OnAppAbout(UINT uNotifyCode, int nID, CWindow wndCtl) {
