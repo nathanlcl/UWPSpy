@@ -1054,6 +1054,30 @@ void CMainDlg::Show() {
 
 void CMainDlg::ElementAdded(const ParentChildRelation& parentChildRelation,
                             const VisualElement& element) {
+    if (m_sticky) {
+        // Sticky is on: freeze the tree and cache the mutation instead of
+        // applying it. The cached mutations are replayed when sticky is
+        // turned off.
+        constexpr size_t kMaxPendingVisualMutations = 100000;
+        if (m_pendingVisualMutations.size() < kMaxPendingVisualMutations) {
+            PendingVisualMutation mutation{
+                .isAdd = true,
+                .parentHandle = parentChildRelation.Parent,
+                .child = parentChildRelation.Child,
+                .childIndex = parentChildRelation.ChildIndex,
+                .handle = element.Handle,
+                .type = element.Type ? std::wstring(element.Type,
+                                                    SysStringLen(element.Type))
+                                     : std::wstring(),
+                .name = element.Name ? std::wstring(element.Name,
+                                                    SysStringLen(element.Name))
+                                     : std::wstring(),
+            };
+            m_pendingVisualMutations.push_back(std::move(mutation));
+        }
+        return;
+    }
+
     ATLASSERT(parentChildRelation.Parent
                   ? parentChildRelation.Child &&
                         parentChildRelation.Child == element.Handle
@@ -1137,6 +1161,36 @@ void CMainDlg::ElementAdded(const ParentChildRelation& parentChildRelation,
 }
 
 void CMainDlg::ElementRemoved(InstanceHandle handle) {
+    if (m_sticky) {
+        // Sticky is on: freeze the tree and cache the mutation instead of
+        // applying it. The cached mutations are replayed when sticky is
+        // turned off.
+        for (auto it = m_pendingVisualMutations.begin();
+             it != m_pendingVisualMutations.end(); ++it) {
+            if (it->isAdd && it->handle == handle) {
+                // The element was added and removed while the tree was
+                // frozen; cancel the pending add instead.
+                m_pendingVisualMutations.erase(it);
+                return;
+            }
+        }
+
+        if (m_elementItems.find(handle) == m_elementItems.end()) {
+            // Unknown element, removing it would be a no-op anyway.
+            return;
+        }
+
+        constexpr size_t kMaxPendingVisualMutations = 100000;
+        if (m_pendingVisualMutations.size() < kMaxPendingVisualMutations) {
+            PendingVisualMutation mutation{
+                .isAdd = false,
+                .handle = handle,
+            };
+            m_pendingVisualMutations.push_back(std::move(mutation));
+        }
+        return;
+    }
+
     auto it = m_elementItems.find(handle);
     if (it == m_elementItems.end()) {
         // I've seen this happen, for example with mspaint if you open the color
@@ -1203,6 +1257,21 @@ BOOL CMainDlg::OnInitDialog(CWindow wndFocus, LPARAM lInitParam) {
                                    ::GetSystemMetrics(SM_CYSMICON));
     SetIcon(m_smallIcon, FALSE);
 
+    // Widen the sticky checkbox so that the countdown text (e.g.
+    // "Sticky (10)") fits. Do it before DlgResize_Init so that the resized
+    // layout is used as the base for the resize map.
+    {
+        CWindow stickyButton = GetDlgItem(IDC_STICKY);
+        CRect stickyRect;
+        stickyButton.GetWindowRect(&stickyRect);
+        ::MapWindowPoints(nullptr, m_hWnd,
+                          reinterpret_cast<POINT*>(&stickyRect), 2);
+        CRect extraWidthRect(0, 0, 24, 0);
+        MapDialogRect(&extraWidthRect);
+        stickyRect.left -= extraWidthRect.Width();
+        stickyButton.MoveWindow(&stickyRect);
+    }
+
     // Init resizing.
     DlgResize_Init();
 
@@ -1252,6 +1321,13 @@ BOOL CMainDlg::OnInitDialog(CWindow wndFocus, LPARAM lInitParam) {
     CButton(GetDlgItem(IDC_STICKY))
         .SetCheck(m_sticky ? BST_CHECKED : BST_UNCHECKED);
 
+    m_stickyToolTip.Create(m_hWnd);
+    if (m_stickyToolTip.IsWindow()) {
+        m_stickyToolTip.AddTool(GetDlgItem(IDC_STICKY),
+                                L"Right-click for delayed options");
+        m_stickyToolTip.Activate(TRUE);
+    }
+
     ::SetWindowSubclass(GetDlgItem(IDC_ATTRIBUTE_LIST), ListViewSubclassProc, 0,
                         (DWORD_PTR)this);
     ::SetWindowSubclass(GetDlgItem(IDC_DETAILS_TABS), TabCtrlSubclassProc, 0,
@@ -1267,7 +1343,11 @@ BOOL CMainDlg::OnInitDialog(CWindow wndFocus, LPARAM lInitParam) {
     return TRUE;
 }
 
-void CMainDlg::OnDestroy() {}
+void CMainDlg::OnDestroy() {
+    if (m_stickyToolTip.IsWindow()) {
+        m_stickyToolTip.DestroyWindow();
+    }
+}
 
 void CMainDlg::ApplyDarkMode() {
     if (!dark_mode::IsSystemDarkModeSupported()) {
@@ -1517,13 +1597,6 @@ void CMainDlg::OnTimer(UINT_PTR nIDEvent) {
             break;
         }
 
-        case TIMER_ID_STICKY_DELAYED:
-            KillTimer(nIDEvent);
-
-            m_sticky = true;
-            CButton(GetDlgItem(IDC_STICKY)).SetCheck(BST_CHECKED);
-            break;
-
         case TIMER_ID_SET_SELECTED_ELEMENT_INFORMATION:
             KillTimer(nIDEvent);
             SetSelectedElementInformation();
@@ -1532,6 +1605,18 @@ void CMainDlg::OnTimer(UINT_PTR nIDEvent) {
         case TIMER_ID_REFRESH_SELECTED_ELEMENT_INFORMATION:
             KillTimer(nIDEvent);
             RefreshSelectedElementInformation(0);
+            break;
+
+        case TIMER_ID_STICKY_DELAYED:
+            if (--m_delayedStickySecondsRemaining <= 0) {
+                KillTimer(nIDEvent);
+                m_delayedStickySecondsRemaining = 0;
+                UpdateStickyButtonText();
+                SetSticky(true);
+                MessageBeep(MB_ICONINFORMATION);
+            } else {
+                UpdateStickyButtonText();
+            }
             break;
 
         case TIMER_ID_COPY_SUBTREE_DELAYED: {
@@ -1584,6 +1669,12 @@ void CMainDlg::OnTimer(UINT_PTR nIDEvent) {
 }
 
 void CMainDlg::OnContextMenu(CWindow wnd, CPoint point) {
+    auto stickyButton = CButton(GetDlgItem(IDC_STICKY));
+    if (wnd == stickyButton) {
+        OnStickyContextMenu(point);
+        return;
+    }
+
     auto treeView = CTreeViewCtrlEx(GetDlgItem(IDC_ELEMENT_TREE));
     if (wnd == treeView) {
         OnElementTreeContextMenu(treeView, point);
@@ -1599,12 +1690,6 @@ void CMainDlg::OnContextMenu(CWindow wnd, CPoint point) {
     auto visualStatesTree = CTreeViewCtrlEx(GetDlgItem(IDC_VISUAL_STATE_TREE));
     if (wnd == visualStatesTree) {
         OnVisualStateContextMenu(visualStatesTree, point);
-        return;
-    }
-
-    auto stickyButton = CButton(GetDlgItem(IDC_STICKY));
-    if (wnd == stickyButton) {
-        OnStickyContextMenu(stickyButton, point);
         return;
     }
 }
@@ -2165,36 +2250,122 @@ void CMainDlg::OnHighlightSelection(UINT uNotifyCode, int nID, CWindow wndCtl) {
 }
 
 void CMainDlg::OnSticky(UINT uNotifyCode, int nID, CWindow wndCtl) {
-    m_sticky = CButton(wndCtl).GetCheck() != BST_UNCHECKED;
-
-    // Cancel a pending delayed sticky if the checkbox was toggled manually.
-    KillTimer(TIMER_ID_STICKY_DELAYED);
+    CancelDelayedSticky();
+    SetSticky(CButton(wndCtl).GetCheck() != BST_UNCHECKED);
 }
 
-void CMainDlg::OnStickyContextMenu(CButton stickyButton, CPoint point) {
-    CPoint menuPoint = point;
-    if (menuPoint.x == -1 && menuPoint.y == -1) {
-        // The context menu was invoked via the keyboard, use the center of
-        // the button.
+void CMainDlg::OnStickyContextMenu(CPoint point) {
+    if (point.x == -1 && point.y == -1) {
+        // Keyboard context menu.
         CRect rect;
-        stickyButton.GetWindowRect(&rect);
-        menuPoint = rect.CenterPoint();
+        GetDlgItem(IDC_STICKY).GetWindowRect(&rect);
+        point = rect.CenterPoint();
     }
+
+    enum {
+        MENU_ID_STICKY_NOW = 1,
+        MENU_ID_STICKY_DELAYED,
+        MENU_ID_STICKY_CANCEL_DELAYED,
+    };
 
     CMenu menu;
     menu.CreatePopupMenu();
 
-    enum { MENU_ID_STICKY_DELAYED = 1 };
-
+    menu.AppendMenu(MF_STRING | (m_sticky ? MF_GRAYED : 0), MENU_ID_STICKY_NOW,
+                    L"Sticky now");
     menu.AppendMenu(MF_STRING | (m_sticky ? MF_GRAYED : 0),
-                    MENU_ID_STICKY_DELAYED, L"Sticky (10 seconds delay)");
+                    MENU_ID_STICKY_DELAYED, L"Sticky after 10 seconds");
+    if (m_delayedStickySecondsRemaining > 0) {
+        menu.AppendMenu(MF_SEPARATOR);
+        menu.AppendMenu(MF_STRING, MENU_ID_STICKY_CANCEL_DELAYED,
+                        L"Cancel delayed sticky");
+    }
 
-    int nCmd = menu.TrackPopupMenu(TPM_RIGHTBUTTON | TPM_RETURNCMD, menuPoint.x,
-                                   menuPoint.y, m_hWnd);
+    int nCmd = menu.TrackPopupMenu(TPM_RIGHTBUTTON | TPM_RETURNCMD, point.x,
+                                   point.y, m_hWnd);
     switch (nCmd) {
-        case MENU_ID_STICKY_DELAYED:
-            SetTimer(TIMER_ID_STICKY_DELAYED, 10000);
+        case MENU_ID_STICKY_NOW:
+            CancelDelayedSticky();
+            SetSticky(true);
             break;
+
+        case MENU_ID_STICKY_DELAYED:
+            StartDelayedSticky(10);
+            break;
+
+        case MENU_ID_STICKY_CANCEL_DELAYED:
+            CancelDelayedSticky();
+            break;
+    }
+}
+
+void CMainDlg::SetSticky(bool sticky) {
+    if (m_sticky == sticky) {
+        return;
+    }
+
+    m_sticky = sticky;
+
+    CButton(GetDlgItem(IDC_STICKY))
+        .SetCheck(m_sticky ? BST_CHECKED : BST_UNCHECKED);
+
+    if (!m_sticky) {
+        // Sticky was turned off: apply the mutations that were cached while
+        // the tree was frozen.
+        ReplayPendingVisualMutations();
+    }
+}
+
+void CMainDlg::StartDelayedSticky(int seconds) {
+    m_delayedStickySecondsRemaining = seconds;
+    UpdateStickyButtonText();
+    SetTimer(TIMER_ID_STICKY_DELAYED, 1000);
+}
+
+void CMainDlg::CancelDelayedSticky() {
+    if (m_delayedStickySecondsRemaining > 0) {
+        KillTimer(TIMER_ID_STICKY_DELAYED);
+        m_delayedStickySecondsRemaining = 0;
+        UpdateStickyButtonText();
+    }
+}
+
+void CMainDlg::UpdateStickyButtonText() {
+    WCHAR text[32];
+    if (m_delayedStickySecondsRemaining > 0) {
+        swprintf_s(text, std::size(text), L"Sticky (%d)",
+                   m_delayedStickySecondsRemaining);
+    } else {
+        wcscpy_s(text, std::size(text), L"Sticky");
+    }
+    SetDlgItemText(IDC_STICKY, text);
+}
+
+void CMainDlg::ReplayPendingVisualMutations() {
+    auto pendingMutations = std::move(m_pendingVisualMutations);
+    m_pendingVisualMutations.clear();
+
+    for (const auto& mutation : pendingMutations) {
+        if (mutation.isAdd) {
+            ParentChildRelation parentChildRelation{};
+            parentChildRelation.Parent = mutation.parentHandle;
+            parentChildRelation.Child = mutation.child;
+            parentChildRelation.ChildIndex = mutation.childIndex;
+
+            VisualElement element{};
+            element.Handle = mutation.handle;
+            element.Type = SysAllocStringLen(
+                mutation.type.data(), static_cast<UINT>(mutation.type.size()));
+            element.Name = SysAllocStringLen(
+                mutation.name.data(), static_cast<UINT>(mutation.name.size()));
+
+            ElementAdded(parentChildRelation, element);
+
+            SysFreeString(element.Type);
+            SysFreeString(element.Name);
+        } else {
+            ElementRemoved(mutation.handle);
+        }
     }
 }
 
