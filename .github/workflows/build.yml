@@ -1,0 +1,41 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore UWPSpy.sln
+
+      - name: Build (Release x64)
+        run: msbuild UWPSpy.sln /p:Configuration=Release /p:Platform=x64 /m /v:m
+
+      - name: Package artifacts
+        shell: pwsh
+        run: Compress-Archive -Path x64\Release\UWPSpy.dll, x64\Release\UWPSpyLauncher.exe -DestinationPath UWPSpy-build-x64.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UWPSpy-Release-x64
+          path: UWPSpy-build-x64.zip
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-sticky-10s
+          name: UWPSpy build (Sticky 10s delay)
+          prerelease: true
+          files: UWPSpy-build-x64.zip
