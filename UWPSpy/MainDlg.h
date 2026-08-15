@@ -171,10 +171,12 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
     void CancelDelayedSticky();
     void UpdateStickyButtonText();
     void ReplayPendingVisualMutations();
-    void SnapshotAllElementsBasicInfo();
+    void SnapshotAllElementsInfo();
     void CacheElementBasicInfo(InstanceHandle handle,
                                wf::IInspectable obj,
                                bool hasParent);
+    void CacheElementAttributes(InstanceHandle handle);
+    void CacheElementVisualStates(InstanceHandle handle);
     void PopulateAttributesListFromCache(InstanceHandle handle);
     void PopulateVisualStatesTreeFromCache(InstanceHandle handle);
     void OnAppAbout(UINT uNotifyCode, int nID, CWindow wndCtl);
@@ -251,9 +253,9 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
 
     // Cached element information, used to display data for elements that no
     // longer exist (e.g. elements of a dismissed context menu inspected
-    // while sticky is on). The basic info (class, name, rectangle) of all
-    // elements is snapshotted when sticky is turned on; attributes and
-    // visual states are cached whenever they are displayed successfully.
+    // while sticky is on). The information of all known elements is
+    // snapshotted when sticky is turned on, and refreshed whenever it is
+    // displayed successfully while the element is still alive.
     struct CachedElementInfo {
         bool hasBasicInfo = false;
         std::wstring className;
