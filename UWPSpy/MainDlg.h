@@ -121,7 +121,7 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
             DLGRESIZE_CONTROL(IDC_PROPERTY_NAME, DLSZ_SIZE_X | DLSZ_MOVE_Y)
             DLGRESIZE_CONTROL(IDC_PROPERTY_VALUE, DLSZ_SIZE_X | DLSZ_MOVE_Y)
             DLGRESIZE_CONTROL(IDC_PROPERTY_VALUE_XAML,
-                              DLSZ_SIZE_X | DLSZ_MOVE_Y)
+                              DLSZ_MOVE_X | DLSZ_MOVE_Y)
             DLGRESIZE_CONTROL(IDC_PROPERTY_IS_XAML, DLSZ_MOVE_X | DLSZ_MOVE_Y)
             DLGRESIZE_CONTROL(IDC_PROPERTY_REMOVE, DLSZ_MOVE_X | DLSZ_MOVE_Y)
             DLGRESIZE_CONTROL(IDC_PROPERTY_SET, DLSZ_MOVE_X | DLSZ_MOVE_Y)
@@ -201,6 +201,9 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
     InstanceHandle ElementFromPoint(CPoint pt);
     InstanceHandle ElementFromPointInSubtree(wux::UIElement subtree, CPoint pt);
     InstanceHandle ElementFromPointInSubtree(mux::UIElement subtree, CPoint pt);
+    bool GetElementScreenRect(InstanceHandle handle,
+                              CRect& rect,
+                              HWND& rootWnd);
     bool CreateFlashArea(InstanceHandle handle);
     void DestroyFlashArea();
     bool SelectElementFromCursor();
@@ -268,6 +271,10 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
         bool hasVisualStates = false;
         std::vector<std::pair<std::wstring, std::vector<std::wstring>>>
             visualStates;
+
+        bool hasScreenRect = false;
+        CRect screenRect;
+        HWND rootWnd = nullptr;
     };
 
     std::unordered_map<InstanceHandle, CachedElementInfo> m_cachedElementInfo;
