@@ -1829,7 +1829,9 @@ InstanceHandle CMainDlg::ElementFromPointInSubtree(mux::UIElement subtree,
     return 0;
 }
 
-bool CMainDlg::CreateFlashArea(InstanceHandle handle) {
+bool CMainDlg::GetElementScreenRect(InstanceHandle handle,
+                                    CRect& rect,
+                                    HWND& rootWnd) {
     wf::IInspectable element;
     wf::IInspectable rootElement;
 
@@ -1864,13 +1866,11 @@ bool CMainDlg::CreateFlashArea(InstanceHandle handle) {
         iterHandle = it->second.parentHandle;
     }
 
-    CWindow rootWnd;
     CRect rootElementRect;
-    if (auto rect = GetRootElementRect(rootElement, &rootWnd.m_hWnd)) {
-        rootElementRect = *rect;
+    if (auto rootRect = GetRootElementRect(rootElement, &rootWnd)) {
+        rootElementRect = *rootRect;
     }
 
-    CRect rect;
     if (element) {
         auto elementRect = GetRelativeElementRect(element);
         if (!elementRect) {
@@ -1880,7 +1880,7 @@ bool CMainDlg::CreateFlashArea(InstanceHandle handle) {
         rect = *elementRect;
         rect.OffsetRect(rootElementRect.TopLeft());
     } else {
-        rect = *rootElementRect;
+        rect = rootElementRect;
     }
 
     if (rootWnd) {
@@ -1895,6 +1895,36 @@ bool CMainDlg::CreateFlashArea(InstanceHandle handle) {
             rectWithDpi.top + MulDiv(rect.bottom - rect.top, dpi, 96);
 
         rect = rectWithDpi;
+    }
+
+    // Cache the screen rectangle while the element is alive, so that the
+    // highlight can still be drawn after the element is destroyed.
+    auto& cache = m_cachedElementInfo[handle];
+    cache.screenRect = rect;
+    cache.rootWnd = rootWnd;
+    cache.hasScreenRect = true;
+
+    return true;
+}
+
+bool CMainDlg::CreateFlashArea(InstanceHandle handle) {
+    CRect rect;
+    CWindow rootWnd;
+
+    if (!GetElementScreenRect(handle, rect, rootWnd.m_hWnd)) {
+        // The element (or its root element) no longer exists. Fall back to
+        // the cached rectangle if available.
+        auto itCache = m_cachedElementInfo.find(handle);
+        if (itCache == m_cachedElementInfo.end() ||
+            !itCache->second.hasScreenRect) {
+            return false;
+        }
+
+        rect = itCache->second.screenRect;
+        rootWnd = itCache->second.rootWnd;
+        if (rootWnd && !rootWnd.IsWindow()) {
+            rootWnd = nullptr;
+        }
     }
 
     DestroyFlashArea();
@@ -2335,6 +2365,13 @@ void CMainDlg::SnapshotAllElementsInfo() {
         CacheElementBasicInfo(handle, obj, !!elementItem.parentHandle);
         CacheElementAttributes(handle);
         CacheElementVisualStates(handle);
+
+        // Cache the screen rectangle as well, so that the highlight can be
+        // drawn after the element is destroyed. The rectangle is cached by
+        // GetElementScreenRect on success.
+        CRect screenRect;
+        HWND rootWnd = nullptr;
+        GetElementScreenRect(handle, screenRect, rootWnd);
     }
 }
 
