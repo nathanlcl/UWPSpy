@@ -1312,12 +1312,10 @@ BOOL CMainDlg::OnInitDialog(CWindow wndFocus, LPARAM lInitParam) {
                                    ::GetSystemMetrics(SM_CYSMICON));
     SetIcon(m_smallIcon, FALSE);
 
-    // Move the sticky checkbox next to the highlight-selection checkbox and
-    // widen it so that the countdown text (e.g. "Sticky (10)") fits. Also
-    // create the delayed-action buttons ("Path 10s", "Subtree 10s",
-    // "Sticky 10s") to the left of the About button. Do all of this before
-    // DlgResize_Init so that the adjusted layout is used as the base for
-    // the resize map.
+    // Move the sticky checkbox next to the highlight-selection checkbox.
+    // Also create the countdown display to the left of the About button.
+    // Do all of this before DlgResize_Init so that the adjusted layout is
+    // used as the base for the resize map.
     {
         CWindow highlightCheckbox = GetDlgItem(IDC_HIGHLIGHT_SELECTION);
         CRect highlightRect;
@@ -1342,53 +1340,32 @@ BOOL CMainDlg::OnInitDialog(CWindow wndFocus, LPARAM lInitParam) {
         stickyRect.right = stickyRect.left + stickyWidth;
         stickyButton.MoveWindow(&stickyRect);
 
-        // Create the delayed-action buttons, right-aligned to the left of
-        // the About button.
+        // Create the countdown display, right-aligned to the left of the
+        // About button. While a delayed action (path, subtree, sticky) is
+        // counting down, its remaining seconds are shown here.
         CWindow aboutButton = GetDlgItem(ID_APP_ABOUT);
         CRect aboutRect;
         aboutButton.GetWindowRect(&aboutRect);
         ::MapWindowPoints(nullptr, m_hWnd,
                           reinterpret_cast<POINT*>(&aboutRect), 2);
 
-        struct DelayedButtonDef {
-            int id;
-            PCWSTR text;
-            int widthUnits;
-        };
-        const DelayedButtonDef delayedButtonDefs[] = {
-            {IDC_PATH_DELAYED, L"Path 10s", 40},
-            {IDC_SUBTREE_DELAYED, L"Subtree 10s", 54},
-            {IDC_STICKY_DELAYED, L"Sticky 10s", 42},
-        };
-
         CRect gapRect(0, 0, 4, 0);
         MapDialogRect(&gapRect);
         int gapWidth = gapRect.Width();
 
-        int totalWidth = gapWidth * ((int)std::size(delayedButtonDefs) - 1);
-        for (const auto& def : delayedButtonDefs) {
-            CRect widthRect(0, 0, def.widthUnits, 0);
-            MapDialogRect(&widthRect);
-            totalWidth += widthRect.Width();
-        }
+        CRect countdownWidthRect(0, 0, 150, 0);
+        MapDialogRect(&countdownWidthRect);
 
-        HFONT dialogFont = GetFont();
-
-        int x = aboutRect.left - gapWidth - totalWidth;
-        for (const auto& def : delayedButtonDefs) {
-            CRect widthRect(0, 0, def.widthUnits, 0);
-            MapDialogRect(&widthRect);
-
-            CRect buttonRect(x, aboutRect.top, x + widthRect.Width(),
-                             aboutRect.bottom);
-            CButton button;
-            button.Create(m_hWnd, buttonRect, def.text,
-                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                          0, (UINT)def.id);
-            button.SetFont(dialogFont);
-
-            x += widthRect.Width() + gapWidth;
-        }
+        CRect countdownRect(aboutRect.left - gapWidth -
+                                countdownWidthRect.Width(),
+                            aboutRect.top, aboutRect.left - gapWidth,
+                            aboutRect.bottom);
+        CStatic countdownDisplay;
+        countdownDisplay.Create(m_hWnd, countdownRect, L"",
+                                WS_CHILD | WS_VISIBLE | SS_RIGHT |
+                                    SS_CENTERIMAGE,
+                                0, IDC_COUNTDOWN_DISPLAY);
+        countdownDisplay.SetFont(GetFont());
     }
 
     // Init resizing.
@@ -1444,15 +1421,6 @@ BOOL CMainDlg::OnInitDialog(CWindow wndFocus, LPARAM lInitParam) {
     if (m_stickyToolTip.IsWindow()) {
         m_stickyToolTip.AddTool(GetDlgItem(IDC_STICKY),
                                 L"Right-click for delayed options");
-        m_stickyToolTip.AddTool(
-            GetDlgItem(IDC_PATH_DELAYED),
-            L"Copy the path of the selected element after 10 seconds");
-        m_stickyToolTip.AddTool(
-            GetDlgItem(IDC_SUBTREE_DELAYED),
-            L"Copy the subtree (with properties) of the selected element "
-            L"after 10 seconds");
-        m_stickyToolTip.AddTool(GetDlgItem(IDC_STICKY_DELAYED),
-                                L"Turn sticky on after 10 seconds");
         m_stickyToolTip.Activate(TRUE);
     }
 
@@ -1751,11 +1719,11 @@ void CMainDlg::OnTimer(UINT_PTR nIDEvent) {
             if (--m_delayedPathSecondsRemaining <= 0) {
                 KillTimer(nIDEvent);
                 m_delayedPathSecondsRemaining = 0;
-                UpdatePathDelayedButtonText();
+                UpdateCountdownDisplay();
                 ExecuteDelayedPath();
                 MessageBeep(MB_ICONINFORMATION);
             } else {
-                UpdatePathDelayedButtonText();
+                UpdateCountdownDisplay();
             }
             break;
 
@@ -1763,60 +1731,13 @@ void CMainDlg::OnTimer(UINT_PTR nIDEvent) {
             if (--m_delayedSubtreeSecondsRemaining <= 0) {
                 KillTimer(nIDEvent);
                 m_delayedSubtreeSecondsRemaining = 0;
-                UpdateSubtreeDelayedButtonText();
+                UpdateCountdownDisplay();
                 ExecuteDelayedSubtree();
                 MessageBeep(MB_ICONINFORMATION);
             } else {
-                UpdateSubtreeDelayedButtonText();
+                UpdateCountdownDisplay();
             }
             break;
-
-        case TIMER_ID_COPY_SUBTREE_DELAYED: {
-            KillTimer(nIDEvent);
-
-            InstanceHandle handle = m_delayedCopySubtreeHandle;
-            bool withProperties = m_delayedCopySubtreeWithProperties;
-            m_delayedCopySubtreeHandle = 0;
-            m_delayedCopySubtreeWithProperties = false;
-
-            auto it = m_elementItems.find(handle);
-            if (it == m_elementItems.end()) {
-                MessageBox(L"Element no longer exists", L"Error");
-                break;
-            }
-
-            try {
-                bool copied;
-                if (withProperties) {
-                    std::wstring dump;
-                    DumpElementRecursive(dump, handle, true);
-                    copied = CopyTextToClipboard(m_hWnd, dump);
-                } else {
-                    auto treeView =
-                        CTreeViewCtrlEx(GetDlgItem(IDC_ELEMENT_TREE));
-                    CString str;
-                    TreeViewSubtreeToString(
-                        treeView, CTreeItem(it->second.treeItem, &treeView),
-                        str);
-                    copied = CopyTextToClipboard(
-                        m_hWnd, {str.GetString(), (size_t)str.GetLength()});
-                }
-
-                if (!copied) {
-                    MessageBox(L"Failed to copy to clipboard", L"Error");
-                    break;
-                }
-
-                MessageBox(L"Content copied successfully", L"Success",
-                           MB_OK | MB_ICONINFORMATION);
-            } catch (...) {
-                HRESULT hr = winrt::to_hresult();
-                auto errorMsg =
-                    std::format(L"Error {:08X}", static_cast<DWORD>(hr));
-                MessageBox(errorMsg.c_str(), L"Error");
-            }
-            break;
-        }
     }
 }
 
@@ -2681,54 +2602,47 @@ void CMainDlg::CancelDelayedSticky() {
 }
 
 void CMainDlg::UpdateStickyButtonText() {
-    WCHAR text[32];
-    if (m_delayedStickySecondsRemaining > 0) {
-        swprintf_s(text, std::size(text), L"Sticky (%d)",
-                   m_delayedStickySecondsRemaining);
-    } else {
-        wcscpy_s(text, std::size(text), L"Sticky");
-    }
-    SetDlgItemText(IDC_STICKY, text);
-
-    if (m_delayedStickySecondsRemaining > 0) {
-        swprintf_s(text, std::size(text), L"Sticky (%d)",
-                   m_delayedStickySecondsRemaining);
-    } else {
-        wcscpy_s(text, std::size(text), L"Sticky 10s");
-    }
-    SetDlgItemText(IDC_STICKY_DELAYED, text);
+    // The sticky checkbox text itself stays "Sticky"; the countdown of all
+    // delayed actions (path, subtree, sticky) is shown in the countdown
+    // display to the left of the About button.
+    SetDlgItemText(IDC_STICKY, L"Sticky");
+    UpdateCountdownDisplay();
 }
 
-void CMainDlg::OnPathDelayedButton(UINT uNotifyCode, int nID,
-                                   CWindow wndCtl) {
+void CMainDlg::UpdateCountdownDisplay() {
+    std::wstring text;
+    WCHAR part[32];
+
     if (m_delayedPathSecondsRemaining > 0) {
-        CancelDelayedPath();
-    } else {
-        StartDelayedPath(10);
+        swprintf_s(part, std::size(part), L"Path (%d)",
+                   m_delayedPathSecondsRemaining);
+        text += part;
     }
-}
 
-void CMainDlg::OnSubtreeDelayedButton(UINT uNotifyCode, int nID,
-                                      CWindow wndCtl) {
     if (m_delayedSubtreeSecondsRemaining > 0) {
-        CancelDelayedSubtree();
-    } else {
-        StartDelayedSubtree(10);
+        if (!text.empty()) {
+            text += L"   ";
+        }
+        swprintf_s(part, std::size(part), L"Subtree (%d)",
+                   m_delayedSubtreeSecondsRemaining);
+        text += part;
     }
-}
 
-void CMainDlg::OnStickyDelayedButton(UINT uNotifyCode, int nID,
-                                     CWindow wndCtl) {
     if (m_delayedStickySecondsRemaining > 0) {
-        CancelDelayedSticky();
-    } else {
-        StartDelayedSticky(10);
+        if (!text.empty()) {
+            text += L"   ";
+        }
+        swprintf_s(part, std::size(part), L"Sticky (%d)",
+                   m_delayedStickySecondsRemaining);
+        text += part;
     }
+
+    SetDlgItemText(IDC_COUNTDOWN_DISPLAY, text.c_str());
 }
 
 void CMainDlg::StartDelayedPath(int seconds) {
     m_delayedPathSecondsRemaining = seconds;
-    UpdatePathDelayedButtonText();
+    UpdateCountdownDisplay();
     SetTimer(TIMER_ID_PATH_DELAYED, 1000);
 }
 
@@ -2736,30 +2650,19 @@ void CMainDlg::CancelDelayedPath() {
     if (m_delayedPathSecondsRemaining > 0) {
         KillTimer(TIMER_ID_PATH_DELAYED);
         m_delayedPathSecondsRemaining = 0;
-        UpdatePathDelayedButtonText();
+        m_delayedPathHandle = 0;
+        UpdateCountdownDisplay();
     }
-}
-
-void CMainDlg::UpdatePathDelayedButtonText() {
-    WCHAR text[32];
-    if (m_delayedPathSecondsRemaining > 0) {
-        swprintf_s(text, std::size(text), L"Path (%d)",
-                   m_delayedPathSecondsRemaining);
-    } else {
-        wcscpy_s(text, std::size(text), L"Path 10s");
-    }
-    SetDlgItemText(IDC_PATH_DELAYED, text);
 }
 
 void CMainDlg::ExecuteDelayedPath() {
-    auto treeView = CTreeViewCtrlEx(GetDlgItem(IDC_ELEMENT_TREE));
-    CTreeItem selectedItem = treeView.GetSelectedItem();
-    if (!selectedItem) {
-        MessageBox(L"No element is selected", L"Error");
+    InstanceHandle handle = m_delayedPathHandle;
+    m_delayedPathHandle = 0;
+
+    if (m_elementItems.find(handle) == m_elementItems.end()) {
+        MessageBox(L"Element no longer exists", L"Error");
         return;
     }
-
-    auto handle = HandleFromLParam(selectedItem.GetData());
 
     try {
         std::wstring path = BuildElementPath(m_xamlDiagnostics.get(),
@@ -2780,7 +2683,7 @@ void CMainDlg::ExecuteDelayedPath() {
 
 void CMainDlg::StartDelayedSubtree(int seconds) {
     m_delayedSubtreeSecondsRemaining = seconds;
-    UpdateSubtreeDelayedButtonText();
+    UpdateCountdownDisplay();
     SetTimer(TIMER_ID_SUBTREE_DELAYED, 1000);
 }
 
@@ -2788,36 +2691,40 @@ void CMainDlg::CancelDelayedSubtree() {
     if (m_delayedSubtreeSecondsRemaining > 0) {
         KillTimer(TIMER_ID_SUBTREE_DELAYED);
         m_delayedSubtreeSecondsRemaining = 0;
-        UpdateSubtreeDelayedButtonText();
+        m_delayedSubtreeHandle = 0;
+        m_delayedSubtreeWithProperties = false;
+        UpdateCountdownDisplay();
     }
-}
-
-void CMainDlg::UpdateSubtreeDelayedButtonText() {
-    WCHAR text[32];
-    if (m_delayedSubtreeSecondsRemaining > 0) {
-        swprintf_s(text, std::size(text), L"Subtree (%d)",
-                   m_delayedSubtreeSecondsRemaining);
-    } else {
-        wcscpy_s(text, std::size(text), L"Subtree 10s");
-    }
-    SetDlgItemText(IDC_SUBTREE_DELAYED, text);
 }
 
 void CMainDlg::ExecuteDelayedSubtree() {
-    auto treeView = CTreeViewCtrlEx(GetDlgItem(IDC_ELEMENT_TREE));
-    CTreeItem selectedItem = treeView.GetSelectedItem();
-    if (!selectedItem) {
-        MessageBox(L"No element is selected", L"Error");
+    InstanceHandle handle = m_delayedSubtreeHandle;
+    bool withProperties = m_delayedSubtreeWithProperties;
+    m_delayedSubtreeHandle = 0;
+    m_delayedSubtreeWithProperties = false;
+
+    auto it = m_elementItems.find(handle);
+    if (it == m_elementItems.end()) {
+        MessageBox(L"Element no longer exists", L"Error");
         return;
     }
 
-    auto handle = HandleFromLParam(selectedItem.GetData());
-
     try {
-        std::wstring dump;
-        DumpElementRecursive(dump, handle, true);
+        bool copied;
+        if (withProperties) {
+            std::wstring dump;
+            DumpElementRecursive(dump, handle, true);
+            copied = CopyTextToClipboard(m_hWnd, dump);
+        } else {
+            auto treeView = CTreeViewCtrlEx(GetDlgItem(IDC_ELEMENT_TREE));
+            CString str;
+            TreeViewSubtreeToString(
+                treeView, CTreeItem(it->second.treeItem, &treeView), str);
+            copied = CopyTextToClipboard(
+                m_hWnd, {str.GetString(), (size_t)str.GetLength()});
+        }
 
-        if (!CopyTextToClipboard(m_hWnd, dump)) {
+        if (!copied) {
             MessageBox(L"Failed to copy to clipboard", L"Error");
             return;
         }
@@ -3547,6 +3454,7 @@ void CMainDlg::OnElementTreeContextMenu(CTreeViewCtrlEx treeView,
         MENU_ID_VISIBLE = 1,
         MENU_ID_COPY_ITEM,
         MENU_ID_COPY_PATH,
+        MENU_ID_COPY_PATH_DELAYED,
         MENU_ID_COPY_SUBTREE,
         MENU_ID_COPY_SUBTREE_DELAYED,
         MENU_ID_COPY_SUBTREE_WITH_PROPERTIES,
@@ -3594,6 +3502,9 @@ void CMainDlg::OnElementTreeContextMenu(CTreeViewCtrlEx treeView,
     menu.AppendMenu(MF_STRING, MENU_ID_COPY_ITEM, L"Copy item");
     menu.AppendMenu(MF_STRING | (isRoot ? MF_GRAYED : 0), MENU_ID_COPY_PATH,
                     L"Copy path");
+    menu.AppendMenu(MF_STRING | (isRoot ? MF_GRAYED : 0),
+                    MENU_ID_COPY_PATH_DELAYED,
+                    L"Copy path (10 seconds delay)");
     menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE, L"Copy subtree");
     menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE_DELAYED,
                     L"Copy subtree (10 seconds delay)");
@@ -3662,16 +3573,21 @@ void CMainDlg::OnElementTreeContextMenu(CTreeViewCtrlEx treeView,
                 break;
             }
 
+            case MENU_ID_COPY_PATH_DELAYED:
+                m_delayedPathHandle = handle;
+                StartDelayedPath(10);
+                break;
+
             case MENU_ID_COPY_SUBTREE_DELAYED:
-                m_delayedCopySubtreeHandle = handle;
-                m_delayedCopySubtreeWithProperties = false;
-                SetTimer(TIMER_ID_COPY_SUBTREE_DELAYED, 10000);
+                m_delayedSubtreeHandle = handle;
+                m_delayedSubtreeWithProperties = false;
+                StartDelayedSubtree(10);
                 break;
 
             case MENU_ID_COPY_SUBTREE_WITH_PROPERTIES_DELAYED:
-                m_delayedCopySubtreeHandle = handle;
-                m_delayedCopySubtreeWithProperties = true;
-                SetTimer(TIMER_ID_COPY_SUBTREE_DELAYED, 10000);
+                m_delayedSubtreeHandle = handle;
+                m_delayedSubtreeWithProperties = true;
+                StartDelayedSubtree(10);
                 break;
         }
     } catch (...) {
