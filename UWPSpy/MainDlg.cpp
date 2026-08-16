@@ -852,20 +852,17 @@ void CMainDlg::DumpElementRecursive(std::wstring& output,
             itCache->second.hasBasicInfo) {
             output += L"Class: ";
             output += itCache->second.className;
-            output += L"
-";
+            output += L"\n";
 
             output += L"Name: ";
             output += itCache->second.elementName.empty()
                           ? L"(none)"
                           : itCache->second.elementName;
-            output += L"
-";
+            output += L"\n";
 
             output += L"Rectangle: ";
             output += itCache->second.rectText;
-            output += L"
-";
+            output += L"\n";
         }
     }
 
