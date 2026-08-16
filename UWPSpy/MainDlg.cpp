@@ -1353,7 +1353,7 @@ BOOL CMainDlg::OnInitDialog(CWindow wndFocus, LPARAM lInitParam) {
         MapDialogRect(&gapRect);
         int gapWidth = gapRect.Width();
 
-        CRect countdownWidthRect(0, 0, 150, 0);
+        CRect countdownWidthRect(0, 0, 200, 0);
         MapDialogRect(&countdownWidthRect);
 
         CRect countdownRect(aboutRect.left - gapWidth -
@@ -2623,7 +2623,10 @@ void CMainDlg::UpdateCountdownDisplay() {
         if (!text.empty()) {
             text += L"   ";
         }
-        swprintf_s(part, std::size(part), L"Subtree (%d)",
+        swprintf_s(part, std::size(part),
+                   m_delayedSubtreeWithProperties
+                       ? L"Subtree with properties (%d)"
+                       : L"Subtree (%d)",
                    m_delayedSubtreeSecondsRemaining);
         text += part;
     }
