@@ -7,11 +7,9 @@
 
 #include "../common/dark_mode.h"
 
-// IDs for the delayed-action buttons that are created at runtime (the
-// resource file is stored as UTF-16 and is left untouched).
-#define IDC_PATH_DELAYED 1026
-#define IDC_SUBTREE_DELAYED 1027
-#define IDC_STICKY_DELAYED 1028
+// ID for the countdown display that is created at runtime (the resource
+// file is stored as UTF-16 and is left untouched).
+#define IDC_COUNTDOWN_DISPLAY 1026
 
 class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
    public:
@@ -21,7 +19,6 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
         TIMER_ID_REDRAW_TREE = 1,
         TIMER_ID_SET_SELECTED_ELEMENT_INFORMATION,
         TIMER_ID_REFRESH_SELECTED_ELEMENT_INFORMATION,
-        TIMER_ID_COPY_SUBTREE_DELAYED,
         TIMER_ID_STICKY_DELAYED,
         TIMER_ID_PATH_DELAYED,
         TIMER_ID_SUBTREE_DELAYED,
@@ -76,9 +73,6 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
         COMMAND_HANDLER_EX(IDC_HIGHLIGHT_SELECTION, BN_CLICKED,
                            OnHighlightSelection)
         COMMAND_HANDLER_EX(IDC_STICKY, BN_CLICKED, OnSticky)
-        COMMAND_ID_HANDLER_EX(IDC_PATH_DELAYED, OnPathDelayedButton)
-        COMMAND_ID_HANDLER_EX(IDC_SUBTREE_DELAYED, OnSubtreeDelayedButton)
-        COMMAND_ID_HANDLER_EX(IDC_STICKY_DELAYED, OnStickyDelayedButton)
         COMMAND_ID_HANDLER_EX(ID_APP_ABOUT, OnAppAbout)
         COMMAND_ID_HANDLER_EX(IDCANCEL, OnCancel)
         MESSAGE_HANDLER_EX(UWM_ACTIVATE_WINDOW, OnActivateWindow)
@@ -181,17 +175,13 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
     void StartDelayedSticky(int seconds);
     void CancelDelayedSticky();
     void UpdateStickyButtonText();
-    void OnPathDelayedButton(UINT uNotifyCode, int nID, CWindow wndCtl);
-    void OnSubtreeDelayedButton(UINT uNotifyCode, int nID, CWindow wndCtl);
-    void OnStickyDelayedButton(UINT uNotifyCode, int nID, CWindow wndCtl);
     void StartDelayedPath(int seconds);
     void CancelDelayedPath();
-    void UpdatePathDelayedButtonText();
     void ExecuteDelayedPath();
     void StartDelayedSubtree(int seconds);
     void CancelDelayedSubtree();
-    void UpdateSubtreeDelayedButtonText();
     void ExecuteDelayedSubtree();
+    void UpdateCountdownDisplay();
     void ReplayPendingVisualMutations();
     void SnapshotAllElementsInfo();
     void CacheElementBasicInfo(InstanceHandle handle,
@@ -261,6 +251,9 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
     int m_delayedStickySecondsRemaining = 0;
     int m_delayedPathSecondsRemaining = 0;
     int m_delayedSubtreeSecondsRemaining = 0;
+    InstanceHandle m_delayedPathHandle = 0;
+    InstanceHandle m_delayedSubtreeHandle = 0;
+    bool m_delayedSubtreeWithProperties = false;
     CToolTipCtrl m_stickyToolTip;
 
     // Visual tree mutations that arrived while sticky was on. They are cached
@@ -323,8 +316,6 @@ class CMainDlg : public CDialogImpl<CMainDlg>, public CDialogResize<CMainDlg> {
 
     CString m_lastPropertySelection;
 
-    InstanceHandle m_delayedCopySubtreeHandle = 0;
-    bool m_delayedCopySubtreeWithProperties = false;
 
     CWindow m_flashAreaWindow;
 
