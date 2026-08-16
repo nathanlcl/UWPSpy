@@ -3337,8 +3337,8 @@ void CMainDlg::OnElementTreeContextMenu(CTreeViewCtrlEx treeView,
     } catch (...) {
     }
 
+    bool visible = false;
     if (element) {
-        bool visible = false;
         bool visibleCanBeToggled = true;
         if (wuiElement) {
             visible = wuiElement.Visibility() == wux::Visibility::Visible;
