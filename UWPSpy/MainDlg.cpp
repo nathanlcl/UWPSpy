@@ -844,6 +844,31 @@ void CMainDlg::DumpElementRecursive(std::wstring& output,
     HRESULT hr = m_xamlDiagnostics->GetIInspectableFromHandle(
         handle, reinterpret_cast<::IInspectable**>(winrt::put_abi(obj)));
 
+    if (FAILED(hr)) {
+        // The element no longer exists, write the cached information if
+        // available.
+        auto itCache = m_cachedElementInfo.find(handle);
+        if (itCache != m_cachedElementInfo.end() &&
+            itCache->second.hasBasicInfo) {
+            output += L"Class: ";
+            output += itCache->second.className;
+            output += L"
+";
+
+            output += L"Name: ";
+            output += itCache->second.elementName.empty()
+                          ? L"(none)"
+                          : itCache->second.elementName;
+            output += L"
+";
+
+            output += L"Rectangle: ";
+            output += itCache->second.rectText;
+            output += L"
+";
+        }
+    }
+
     if (SUCCEEDED(hr)) {
         // Write class name
         auto className = winrt::get_class_name(obj);
@@ -948,8 +973,23 @@ void CMainDlg::DumpElementRecursive(std::wstring& output,
         CoTaskMemFree(pPropertySources);
         CoTaskMemFree(pPropertyValues);
     } else {
-        output += L"Properties:\n";
-        output += L"(no properties available)\n";
+        auto itCache = m_cachedElementInfo.find(handle);
+        if (itCache != m_cachedElementInfo.end() &&
+            itCache->second.hasAttributes) {
+            // The element information can't be retrieved, write the cached
+            // properties.
+            output += L"Properties (cached):\n";
+            for (const auto& [name, value] : itCache->second.attributes) {
+                output += L"- ";
+                output += name;
+                output += L": ";
+                output += value;
+                output += L"\n";
+            }
+        } else {
+            output += L"Properties:\n";
+            output += L"(no properties available)\n";
+        }
     }
 
     // Write visual states (only if any exist)
@@ -1009,6 +1049,23 @@ void CMainDlg::DumpElementRecursive(std::wstring& output,
         } catch (...) {
             // Silently skip on error - visual states are optional, and if
             // there are none, the output should not be affected.
+        }
+    } else if (auto itCache = m_cachedElementInfo.find(handle);
+               itCache != m_cachedElementInfo.end() &&
+               itCache->second.hasVisualStates &&
+               !itCache->second.visualStates.empty()) {
+        // The element no longer exists, write the cached visual states.
+        output += L"Visual states (cached):\n";
+        for (const auto& [groupName, states] : itCache->second.visualStates) {
+            output += L"- ";
+            output += groupName;
+            output += L":\n";
+
+            for (const auto& stateName : states) {
+                output += L"  - ";
+                output += stateName;
+                output += L"\n";
+            }
         }
     }
 
@@ -3266,16 +3323,24 @@ void CMainDlg::OnElementTreeContextMenu(CTreeViewCtrlEx treeView,
 
     bool isRoot = !targetItem.GetParent();
 
+    // The element might no longer exist (e.g. an element of a dismissed
+    // context menu inspected while sticky is on). In that case, only the
+    // operations that work with the cached data are offered.
+    wf::IInspectable element;
+    wux::UIElement wuiElement = nullptr;
+    mux::UIElement muiElement = nullptr;
     try {
-        wf::IInspectable element;
         winrt::check_hresult(m_xamlDiagnostics->GetIInspectableFromHandle(
             handle,
             reinterpret_cast<::IInspectable**>(winrt::put_abi(element))));
 
-        auto wuiElement = element.try_as<wux::UIElement>();
-        auto muiElement = wuiElement ? mux::UIElement{nullptr}
-                                     : element.try_as<mux::UIElement>();
+        wuiElement = element.try_as<wux::UIElement>();
+        muiElement = wuiElement ? mux::UIElement{nullptr}
+                                : element.try_as<mux::UIElement>();
+    } catch (...) {
+    }
 
+    if (element) {
         bool visible = false;
         bool visibleCanBeToggled = true;
         if (wuiElement) {
@@ -3290,17 +3355,20 @@ void CMainDlg::OnElementTreeContextMenu(CTreeViewCtrlEx treeView,
                             (visibleCanBeToggled ? 0 : MF_GRAYED),
                         MENU_ID_VISIBLE, L"Visible");
         menu.AppendMenu(MF_SEPARATOR);
-        menu.AppendMenu(MF_STRING, MENU_ID_COPY_ITEM, L"Copy item");
-        menu.AppendMenu(MF_STRING | (isRoot ? MF_GRAYED : 0), MENU_ID_COPY_PATH,
-                        L"Copy path");
-        menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE, L"Copy subtree");
-        menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE_DELAYED,
-                        L"Copy subtree (10 seconds delay)");
-        menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE_WITH_PROPERTIES,
-                        L"Copy subtree with properties");
-        menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE_WITH_PROPERTIES_DELAYED,
-                        L"Copy subtree with properties (10 seconds delay)");
+    }
 
+    menu.AppendMenu(MF_STRING, MENU_ID_COPY_ITEM, L"Copy item");
+    menu.AppendMenu(MF_STRING | (isRoot ? MF_GRAYED : 0), MENU_ID_COPY_PATH,
+                    L"Copy path");
+    menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE, L"Copy subtree");
+    menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE_DELAYED,
+                    L"Copy subtree (10 seconds delay)");
+    menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE_WITH_PROPERTIES,
+                    L"Copy subtree with properties");
+    menu.AppendMenu(MF_STRING, MENU_ID_COPY_SUBTREE_WITH_PROPERTIES_DELAYED,
+                    L"Copy subtree with properties (10 seconds delay)");
+
+    try {
         int nCmd = menu.TrackPopupMenu(TPM_RIGHTBUTTON | TPM_RETURNCMD,
                                        menuPoint.x, menuPoint.y, m_hWnd);
         switch (nCmd) {
